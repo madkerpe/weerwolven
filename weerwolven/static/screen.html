@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wakkerdam</title>
+<link rel="stylesheet" href="/static/app.css">
+<style>
+  body { overflow: hidden; height: 100vh; transition: background 1.5s; }
+  body.night { background: #090a16; }
+  body.day { background: #16120f; }
+  .screen { display: grid; grid-template-columns: 1fr 340px; grid-template-rows: auto 1fr auto; height: 100vh; gap: 0; }
+  .top { grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: center; padding: 18px 36px; border-bottom: 1px solid var(--line); }
+  .top h1 { font-size: 1.6rem; margin: 0; letter-spacing: .04em; }
+  .top .phase { font-size: 1.4rem; color: var(--accent2); }
+  .main { padding: 36px 48px; display: flex; flex-direction: column; justify-content: center; overflow: hidden; }
+  .instruction { font-size: 1.5rem; color: var(--accent2); text-transform: uppercase; letter-spacing: .12em; margin-bottom: 24px; font-family: Georgia, serif; }
+  .story { font-size: 2.1rem; line-height: 1.4; max-height: 62vh; overflow-y: auto; }
+  .story.len2 { font-size: 1.75rem; } .story.len3 { font-size: 1.45rem; } .story.len4 { font-size: 1.2rem; }
+  .story.thinking { color: var(--muted); font-style: italic; font-size: 1.5rem; }
+  .side { border-left: 1px solid var(--line); padding: 24px; display: flex; flex-direction: column; gap: 18px; overflow: hidden; }
+  .side .player { font-size: 1.05rem; padding: 8px 12px; }
+  .side .players { gap: 8px; }
+  .bottom { grid-column: 1 / -1; border-top: 1px solid var(--line); padding: 10px 36px; min-height: 54px; display: flex; align-items: center; gap: 24px; overflow: hidden; white-space: nowrap; font-size: 1.05rem; }
+  .bottom .m b { color: var(--accent2); }
+  .lobby { text-align: center; }
+  .lobby img, .lobby svg { width: 320px; height: 320px; }
+  .lobby .url { font-size: 2rem; color: var(--accent2); margin-top: 12px; }
+  .overlay { position: fixed; inset: 0; background: rgba(5,5,10,.92); display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 20; gap: 20px; }
+  .overlay button { font-size: 1.6rem; padding: 20px 40px; }
+  .progress { height: 10px; background: var(--panel2); border-radius: 5px; overflow: hidden; }
+  .progress i { display: block; height: 100%; background: var(--accent2); transition: width .4s; }
+  .votebox { font-size: 1.1rem; }
+  .ctrl { position: fixed; right: 12px; bottom: 64px; opacity: .25; font-size: .8rem; }
+  .ctrl:hover { opacity: 1; }
+  .ctrl select, .ctrl button { font-size: .8rem; min-height: 28px; padding: 2px 6px; }
+  .dead-roles { font-size: .95rem; color: var(--muted); }
+  .moon { font-size: 3rem; }
+</style>
+</head>
+<body>
+<div class="overlay" id="overlay">
+  <h1 style="font-size:3rem">Weerwolven van Wakkerdam</h1>
+  <p class="muted">Klik om het geluid aan te zetten en de avond te starten.</p>
+  <button class="primary" id="startBtn">Start de avond</button>
+</div>
+<div class="screen">
+  <div class="top"><h1>WAKKERDAM</h1><div class="phase" id="phase"></div></div>
+  <div class="main" id="main"></div>
+  <div class="side" id="side"></div>
+  <div class="bottom" id="bottom"></div>
+</div>
+<div class="ctrl"><select id="voice"></select> <button id="mute">stil</button> <button id="fs">volledig scherm</button></div>
+<script src="/static/common.js"></script>
+<script>
+(function () {
+  const { esc, connect, phaseLabel, isNight, ROLE_NL } = WW;
+  let view = null, spoken = new Set(), lastRepeat = 0, muted = false, voice = null, queue = [], speaking = false, unlocked = false;
+  const synth = window.speechSynthesis;
+
+  function loadVoices() {
+    const vs = synth ? synth.getVoices() : [];
+    const sel = document.getElementById('voice');
+    const nl = vs.filter(v => /^nl/i.test(v.lang));
+    const pref = ['Ellen', 'Xander', 'Claire', 'Google Nederlands'];
+    const rank = (v) => { const i = pref.findIndex(p => v.name.startsWith(p)); return i === -1 ? 99 : i; };
+    nl.sort((a, b) => rank(a) - rank(b));
+    sel.innerHTML = nl.map(v => `<option value="${esc(v.name)}">${esc(v.name)} (${esc(v.lang)})</option>`).join('') || '<option value="">geen NL stem</option>';
+    const saved = (() => { try { return localStorage.getItem('ww_voice'); } catch { return null; } })();
+    voice = nl.find(v => v.name === saved) || nl[0] || null;
+    if (voice) sel.value = voice.name;
+    sel.onchange = () => { voice = vs.find(v => v.name === sel.value) || null; try { localStorage.setItem('ww_voice', sel.value); } catch {} };
+  }
+  if (synth) { loadVoices(); synth.onvoiceschanged = loadVoices; }
+
+  function splitSentences(t) { return t.replace(/\s+/g, ' ').match(/[^.!?]+[.!?]+["']?|[^.!?]+$/g) || [t]; }
+  function speak(text) {
+    if (!synth || !unlocked) return;
+    queue.push(...splitSentences(text).map(s => s.trim()).filter(Boolean));
+    pump();
+  }
+  function pump() {
+    if (speaking || !queue.length || muted) return;
+    const s = queue.shift();
+    const u = new SpeechSynthesisUtterance(s);
+    if (voice) u.voice = voice;
+    u.lang = voice ? voice.lang : 'nl-BE';
+    u.rate = 0.95; u.pitch = 1.0;
+    speaking = true;
+    u.onend = u.onerror = () => { speaking = false; setTimeout(pump, 350); };
+    synth.speak(u);
+    // Chrome-bug: lange stiltes pauzeren de synth
+    setTimeout(() => { if (synth.paused) synth.resume(); }, 1000);
+  }
+  function stopSpeaking() { queue = []; speaking = false; synth && synth.cancel(); }
+
+  document.getElementById('startBtn').onclick = () => {
+    unlocked = true; document.getElementById('overlay').style.display = 'none';
+    if (synth) { const u = new SpeechSynthesisUtterance(' '); synth.speak(u); }
+    if (view) { const ready = view.narrations.filter(n => n.status === 'ready'); const last = ready[ready.length - 1]; if (last) { spoken.add(last.id); speak(last.text); } view.narrations.forEach(n => spoken.add(n.id)); }
+  };
+  document.getElementById('mute').onclick = (e) => { muted = !muted; e.target.textContent = muted ? 'geluid aan' : 'stil'; if (muted) stopSpeaking(); };
+  document.getElementById('fs').onclick = () => document.documentElement.requestFullscreen && document.documentElement.requestFullscreen();
+
+  connect(() => ({ kind: 'screen' }), { onState(v) { view = v; render(); } });
+
+  function render() {
+    const v = view;
+    document.body.className = isNight(v) ? 'night' : (v.phase === 'day' || v.phase === 'vote' ? 'day' : '');
+    document.getElementById('phase').textContent = phaseLabel(v);
+    // Spraak: nieuwe klare vertellingen, in volgorde
+    (v.narrations || []).forEach(n => { if (n.status === 'ready' && !spoken.has(n.id)) { spoken.add(n.id); if (n.text) speak(n.text); } });
+    if (v.repeat && v.repeat.seq !== lastRepeat) { lastRepeat = v.repeat.seq; const n = v.narrations.find(x => x.id === v.repeat.id); if (n) { stopSpeaking(); speak(n.text); } }
+    renderMain(v); renderSide(v); renderBottom(v);
+  }
+
+  function renderMain(v) {
+    const main = document.getElementById('main');
+    if (v.phase === 'lobby') {
+      main.innerHTML = `<div class="lobby"><div class="instruction">Scan en kies je naam</div><img src="/qr.svg?t=${v.game_no}" alt="QR"><div class="url">${esc(v.join_url || '')}</div>
+        <p class="muted" style="margin-top:18px">${v.players.filter(p => p.claimed).length} van ${v.players.length} hebben een naam gekozen.</p></div>`;
+      return;
+    }
+    const narrs = v.narrations || [];
+    const thinking = narrs.find(n => n.status === 'thinking');
+    const ready = narrs.filter(n => n.status === 'ready' && n.text);
+    const last = ready[ready.length - 1];
+    let story = '';
+    const lenCls = (t) => t.length > 900 ? 'len4' : t.length > 600 ? 'len3' : t.length > 350 ? 'len2' : '';
+    if (last) story = `<div class="story ${lenCls(last.text)}">${esc(last.text)}</div>`;
+    if (thinking) story += `<div class="story thinking" style="margin-top:16px">De verteller denkt na...</div>`;
+    let extra = '';
+    if (isNight(v)) {
+      const pct = v.night_progress.total ? Math.round(100 * v.night_progress.done / v.night_progress.total) : 0;
+      extra = `<div style="margin-top:28px"><div class="progress"><i style="width:${pct}%"></i></div><p class="muted">${v.night_progress.done} van ${v.night_progress.total} hebben getikt</p></div>`;
+    }
+    if (v.phase === 'vote') {
+      const alive = v.players.filter(p => p.alive);
+      extra = `<div class="votebox" style="margin-top:28px"><p>${v.vote.round === 2 ? 'Herstemming tussen ' + v.vote.candidates.map(esc).join(' en ') + '.' : ''} Gestemd: ${v.vote.voted.length} van ${alive.length}</p>
+        <div class="players">${alive.map(p => `<span class="player" style="${v.vote.voted.includes(p.name) ? 'border-color:var(--ok)' : 'opacity:.5'}">${esc(p.name)}</span>`).join('')}</div></div>`;
+    }
+    if ((v.phase === 'dusk' || v.phase === 'hunter') && v.vote.last_result && v.vote.last_result.counts && Object.keys(v.vote.last_result.counts).length) {
+      const c = v.vote.last_result.counts;
+      extra = `<p class="muted" style="margin-top:24px">Uitslag: ${Object.entries(c).sort((a, b) => b[1] - a[1]).map(([n, k]) => `${esc(n)} ${k}`).join(' · ')}</p>`;
+    }
+    if (v.phase === 'end') {
+      extra += `<div class="dead-roles" style="margin-top:18px">${v.players.map(p => `${esc(p.name)}: ${esc(ROLE_NL[p.role] || '?')}${p.lover ? ' (verliefd op ' + esc(p.lover) + ')' : ''}`).join(' · ')}</div>`;
+    }
+    main.innerHTML = `<div class="instruction">${esc(v.screen_instruction)}</div>${story}${extra}`;
+    fitStory();
+  }
+
+  function fitStory() {
+    const el = document.querySelector('.story:not(.thinking)');
+    if (!el) return;
+    let size = parseFloat(getComputedStyle(el).fontSize);
+    let guard = 40;
+    while (el.scrollHeight > el.clientHeight + 2 && size > 14 && guard-- > 0) {
+      size -= 1; el.style.fontSize = size + 'px';
+    }
+  }
+  window.addEventListener('resize', fitStory);
+
+  function renderSide(v) {
+    const side = document.getElementById('side');
+    const alive = v.players.filter(p => p.alive), dead = v.players.filter(p => !p.alive);
+    const mark = (p) => {
+      if (v.phase === 'reveal') return p.acked ? ' ✓' : '';
+      if (v.phase === 'vote') return v.vote.voted.includes(p.name) ? ' ✓' : '';
+      return '';
+    };
+    side.innerHTML = `
+      <div><h3>In leven (${alive.length})</h3><div class="players">${alive.map(p => `<span class="player ${p.connected ? '' : 'off'}">${esc(p.name)}${mark(p)}${p.titel ? `<span class="sub">${esc(p.titel)}</span>` : ''}</span>`).join('')}</div></div>
+      ${dead.length ? `<div><h3>Gestorven (${dead.length})</h3><div class="players">${dead.map(p => `<span class="player dead">${esc(p.name)}<span class="sub">${esc(p.titel || '')}${p.role ? ' · ' + esc(ROLE_NL[p.role]) : ''}</span></span>`).join('')}</div></div>` : ''}
+      ${v.phase !== 'lobby' ? `<div class="muted" style="font-size:.85rem">Niet verbonden toestellen staan gestippeld.</div>` : ''}`;
+  }
+
+  function renderBottom(v) {
+    const msgs = (v.chat || []).slice(-4);
+    document.getElementById('bottom').innerHTML = msgs.length ? msgs.map(m => `<span class="m"><b>${esc(m.from)}</b> ${esc(m.text)}</span>`).join('') : `<span class="muted">Berichten uit het dorp verschijnen hier.</span>`;
+  }
+})();
+</script>
+</body>
+</html>

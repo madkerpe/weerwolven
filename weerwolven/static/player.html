@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Weerwolven van Wakkerdam</title>
+<link rel="stylesheet" href="/static/app.css">
+<style>
+  header { display: flex; justify-content: space-between; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header .me { font-weight: 600; color: var(--accent2); }
+  .names button { min-height: 60px; font-size: 1.1rem; }
+  .names button.taken { opacity: .5; }
+  .opt { min-height: 56px; font-size: 1.05rem; }
+  .pick2 .opt.selected { background: #3a2a2a; }
+  .big { font-size: 1.15rem; }
+  .conn { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); display: inline-block; margin-right: 6px; }
+  .conn.on { background: var(--ok); }
+  .allroles td { padding: 4px 8px; }
+</style>
+</head>
+<body>
+<header>
+  <div><span id="conn" class="conn"></span><span id="phase" class="muted">Verbinden...</span></div>
+  <div class="me" id="meName"></div>
+</header>
+<div class="wrap" id="app"></div>
+<script src="/static/common.js"></script>
+<script>
+(function () {
+  const { esc, toast, connect, phaseLabel, isNight, ROLE_NL } = WW;
+  const store = {
+    get name() { try { return localStorage.getItem('ww_name'); } catch { return null; } },
+    get token() { try { return localStorage.getItem('ww_token'); } catch { return null; } },
+    set(name, token) { try { localStorage.setItem('ww_name', name); localStorage.setItem('ww_token', token); } catch {} },
+    clear() { try { localStorage.removeItem('ww_name'); localStorage.removeItem('ww_token'); } catch {} },
+  };
+  let view = null, roleShown = false, chatChannel = 'public', sel = [], witch = { heal: false, poison: null }, lastNarrId = 0;
+  const app = document.getElementById('app');
+
+  const sock = connect(() => ({ kind: 'player', name: store.name, token: store.token }), {
+    onState(v) { view = v; render(); document.getElementById('conn').classList.add('on'); },
+    onClose() { document.getElementById('conn').classList.remove('on'); },
+    onMessage(m) {
+      if (m.type === 'claimed') { store.set(m.name, m.token); }
+      if (m.type === 'kicked') { store.clear(); toast('De host heeft je zetel vrijgegeven. Kies opnieuw je naam.'); view && (view.me = null); render(); }
+    },
+    onError(m) { toast(m.text); },
+  });
+
+  function send(obj) { sock.send(obj); }
+  function act(action, extra) { send({ type: 'act', action, ...(extra || {}) }); }
+
+
+  function withFocus(fn) {
+    const a = document.activeElement, id = a && a.id, pos = a && a.selectionStart;
+    fn();
+    if (id) { const el = document.getElementById(id); if (el) { el.focus(); try { el.setSelectionRange(pos, pos); } catch {} } }
+  }
+  let chatDraft = '';
+  function render() { withFocus(renderInner); }
+  function renderInner() {
+    if (!view) return;
+    document.getElementById('phase').textContent = phaseLabel(view);
+    document.getElementById('meName').textContent = view.me ? view.me.name : '';
+    if (!view.me) { renderLogin(); return; }
+    const me = view.me;
+    const night = isNight(view);
+    let html = '';
+    // Vertellerstekst (laatste)
+    const narrs = (view.narrations || []).filter(n => n.status === 'ready');
+    const last = narrs[narrs.length - 1];
+    if (last && last.id !== lastNarrId && me.prompt.kind !== 'ack') { /* niets, alleen tonen */ }
+    html += renderPrompt(me, night);
+    html += renderRole(me);
+    if (me.all_roles) html += renderAllRoles(me);
+    if (last) html += `<div class="card"><h3>De verteller zei</h3><p class="narr">${esc(last.text)}</p></div>`;
+    html += renderPlayers();
+    html += renderChat(me);
+    html += `<p class="muted" style="text-align:center;font-size:.8rem">Spel ${view.game_no + 1} · <a href="#" id="logout" style="color:var(--muted)">ander toestel? naam loslaten</a></p>`;
+    app.innerHTML = html;
+    bind(me);
+  }
+
+  function renderLogin() {
+    const taken = {};
+    (view.players || []).forEach(p => { taken[p.name] = p.claimed; });
+    app.innerHTML = `
+      <div class="card"><h1>Wie ben jij?</h1><p class="muted">Kies je naam. Dit toestel blijft dan van jou voor de rest van de avond.</p>
+      <div class="grid names">${view.players.map(p => `<button data-name="${esc(p.name)}" class="${taken[p.name] ? 'taken' : ''}">${esc(p.name)}${taken[p.name] ? '<br><span class="muted" style="font-size:.7rem">al gekozen</span>' : ''}</button>`).join('')}</div></div>`;
+    app.querySelectorAll('button[data-name]').forEach(b => b.onclick = () => send({ type: 'claim', name: b.dataset.name, token: store.token }));
+  }
+
+  function renderPrompt(me, night) {
+    const p = me.prompt;
+    const cls = 'card ' + (night ? 'night' : '') + (['pick', 'pick2', 'witch', 'vote', 'ack'].includes(p.kind) && !p.submitted ? ' alert' : '');
+    let body = '';
+    if (p.kind === 'wait' || p.kind === 'info' || p.kind === 'end') {
+      body = `<p class="big">${esc(p.text)}</p>`;
+      if (p.kind === 'end') body += `<p class="muted">De host kan een nieuw spel starten.</p>`;
+    } else if (p.kind === 'dead') {
+      body = `<p class="big">${esc(p.text)}</p>`;
+    } else if (p.kind === 'ack') {
+      body = `<p>${esc(p.text)}</p>` + (p.submitted ? `<p class="status">Gelezen. Wachten op de anderen...</p>` : `<button class="primary" style="width:100%" id="ackBtn">Gelezen</button>`);
+    } else if (p.kind === 'pick' || p.kind === 'vote') {
+      if (p.mates) {
+        const m = Object.entries(p.mates).map(([n, t]) => `${esc(n)} kiest ${t ? '<b>' + esc(t) + '</b>' : 'nog niets'}`).join(', ');
+        body += `<p class="status">Je medewolf: ${m}.</p>`;
+      }
+      body += p.text ? `<p>${esc(p.text)}</p>` : '';
+      if (p.submitted && p.kind !== 'pick' || (p.submitted && !p.mates)) {
+        body += `<p class="status">Keuze doorgegeven${p.chosen ? ': <b>' + esc(p.chosen) + '</b>' : ''}. Wachten op de anderen...</p>`;
+        if (p.kind === 'vote') body += `<p class="muted" style="font-size:.85rem">Je kunt nog veranderen zolang niet iedereen gestemd heeft.</p>`;
+      }
+      if (!p.submitted || p.kind === 'vote' || p.mates) {
+        body += `<div class="grid">${p.options.map(o => `<button class="opt ${p.chosen === o ? 'selected' : ''}" data-pick="${esc(o)}">${esc(o)}</button>`).join('')}</div>`;
+        if (p.allow_none) body += `<button class="ghost" style="width:100%;margin-top:8px" data-pick="">Blanco</button>`;
+      }
+    } else if (p.kind === 'pick2') {
+      body += `<p>${esc(p.text)} Tik twee namen aan.</p>`;
+      if (p.submitted) body += `<p class="status">De geliefden zijn gekozen. Wachten op de anderen...</p>`;
+      else {
+        body += `<div class="grid pick2">${p.options.map(o => `<button class="opt ${sel.includes(o) ? 'selected' : ''}" data-sel="${esc(o)}">${esc(o)}</button>`).join('')}</div>
+          <button class="primary" style="width:100%;margin-top:10px" id="cupBtn" ${sel.length === 2 ? '' : 'disabled'}>Verbind ${esc(sel[0] || '...')} en ${esc(sel[1] || '...')}</button>`;
+      }
+    } else if (p.kind === 'witch') {
+      body += `<p class="big">${esc(p.text)}</p>`;
+      if (p.submitted) body += `<p class="status">Beslissing doorgegeven. Wachten op de anderen...</p>`;
+      else {
+        if (p.can_heal) body += `<button class="opt ${witch.heal ? 'selected' : ''}" style="width:100%" id="healBtn">${witch.heal ? 'Je redt ' + esc(p.victim) : 'Red ' + esc(p.victim) + ' (levensdrank)'}</button>`;
+        else body += `<p class="muted">${p.victim ? 'Je levensdrank is op.' : ''}</p>`;
+        if (p.can_poison) {
+          body += `<p style="margin-top:12px">Gifdrank gebruiken op:</p><div class="grid">${p.options.map(o => `<button class="opt ${witch.poison === o ? 'selected' : ''}" data-poison="${esc(o)}">${esc(o)}</button>`).join('')}</div>`;
+        } else body += `<p class="muted">Je gifdrank is op.</p>`;
+        body += `<button class="primary" style="width:100%;margin-top:12px" id="witchBtn">${witch.heal || witch.poison ? 'Bevestig' : 'Doe niets vannacht'}</button>`;
+      }
+    }
+    return `<div class="${cls}"><h2>${esc(p.title)}</h2>${body}</div>`;
+  }
+
+  function renderRole(me) {
+    if (!me.role) return '';
+    const r = me.role_info, pg = me.personage;
+    if (!roleShown) return `<div class="card rolecard"><div class="row"><div><h3>Jouw rol en personage</h3><p class="muted">Verborgen. Tik om te tonen, zorg dat niemand meekijkt.</p></div><button id="showRole" style="flex:0 0 auto">Toon</button></div></div>`;
+    let extra = '';
+    if (me.mates && me.mates.length) extra += `<p><b>Medewolf:</b> ${me.mates.map(esc).join(', ')}</p>`;
+    if (me.lover) extra += `<p><b>Verliefd op:</b> ${esc(me.lover)}. Sterft de ene, dan sterft de andere.</p>`;
+    if (me.potions) extra += `<p><b>Drankjes:</b> levensdrank ${me.potions.heal ? 'beschikbaar' : 'op'}, gifdrank ${me.potions.poison ? 'beschikbaar' : 'op'}.</p>`;
+    if (me.seer_log && me.seer_log.length) extra += `<p><b>Wat je zag:</b> ${me.seer_log.map(e => `nacht ${e.day}: ${esc(e.target)} is ${esc(e.role_name)}`).join('; ')}.</p>`;
+    return `<div class="card rolecard">
+      <div class="row"><div class="role">${esc(r.naam)}</div><button class="small" id="hideRole" style="flex:0 0 auto">Verberg</button></div>
+      <p>${esc(r.uitleg)}</p>${extra}
+      <hr style="border:0;border-top:1px solid var(--line)">
+      <h3>Personage: ${esc(pg.titel)}</h3>
+      <p><b>${esc(pg.beroep)}.</b> ${esc(pg.publiek)}</p>
+      <p class="muted" style="font-size:.85rem">Dit mag je aan tafel vertellen. Je rol niet.</p>
+      <p class="secret"><b>Je geheimpje (niets met je rol te maken):</b> ${esc(pg.geheim)}</p>
+    </div>`;
+  }
+
+  function renderAllRoles(me) {
+    const lovers = me.all_lovers || [];
+    return `<div class="card"><h3>Alle rollen (alleen voor doden en na het spel)</h3><table class="allroles">${Object.entries(me.all_roles).map(([n, r]) => `<tr><td>${esc(n)}</td><td><b>${esc(ROLE_NL[r] || r)}</b>${lovers.includes(n) ? ' <span class="tag">verliefd</span>' : ''}</td></tr>`).join('')}</table></div>`;
+  }
+
+  function renderPlayers() {
+    return `<div class="card"><h3>Het dorp</h3><div class="players">${view.players.map(p => `<span class="player ${p.alive ? '' : 'dead'} ${p.connected ? '' : 'off'}">${esc(p.name)}${p.titel ? `<span class="sub">${esc(p.titel)}${p.role ? ' · ' + esc(ROLE_NL[p.role]) : ''}</span>` : ''}</span>`).join('')}</div></div>`;
+  }
+
+  const CH_NL = { public: 'Dorp', wolves: 'Wolven', lovers: 'Geliefden', dead: 'Hiernamaals' };
+  function renderChat(me) {
+    const chans = me.channels || [];
+    if (!chans.length) return '';
+    if (!chans.includes(chatChannel)) chatChannel = chans[0];
+    const msgs = chatChannel === 'public' ? (view.chat || []) : ((view.private_chat || {})[chatChannel] || []);
+    return `<div class="card"><h3>Berichten</h3>
+      <div class="tabs">${chans.map(c => `<button class="${c === chatChannel ? 'selected' : ''}" data-chan="${c}">${CH_NL[c]}</button>`).join('')}</div>
+      <div class="chat" id="chatBox">${msgs.length ? msgs.map(m => `<div class="m"><b>${esc(m.from)}</b> ${esc(m.text)}</div>`).join('') : '<p class="muted">Nog niets.</p>'}</div>
+      <form id="chatForm" class="row" style="margin-top:8px"><input type="text" id="chatInput" value="${esc(chatDraft)}" placeholder="${chatChannel === 'public' ? 'Zeg iets tegen het dorp (verschijnt op het scherm)' : 'Privé in ' + CH_NL[chatChannel]}" maxlength="280" autocomplete="off"><button class="primary" style="flex:0 0 auto">Stuur</button></form></div>`;
+  }
+
+  function bind(me) {
+    const p = me.prompt;
+    const q = (s) => app.querySelector(s);
+    q('#ackBtn') && (q('#ackBtn').onclick = () => act('ack'));
+    q('#showRole') && (q('#showRole').onclick = () => { roleShown = true; render(); });
+    q('#hideRole') && (q('#hideRole').onclick = () => { roleShown = false; render(); });
+    q('#logout') && (q('#logout').onclick = (e) => { e.preventDefault(); if (confirm('Naam loslaten op dit toestel? Alleen nodig als je van telefoon wisselt. Vraag dan de host om je zetel vrij te geven.')) { store.clear(); location.reload(); } });
+    app.querySelectorAll('[data-pick]').forEach(b => b.onclick = () => {
+      const t = b.dataset.pick;
+      if (p.kind === 'vote') act('vote', { target: t || null });
+      else if (view.phase === 'hunter') act('hunter', { target: t });
+      else if (p.decoy) act('gossip', { target: t });
+      else if (me.role === 'weerwolf' && view.phase === 'night_wolves') act('wolf', { target: t });
+      else if (me.role === 'ziener' && view.phase === 'night_wolves') act('seer', { target: t });
+      else act('gossip', { target: t });
+    });
+    app.querySelectorAll('[data-sel]').forEach(b => b.onclick = () => {
+      const n = b.dataset.sel;
+      if (sel.includes(n)) sel = sel.filter(x => x !== n); else { sel.push(n); if (sel.length > 2) sel.shift(); }
+      render();
+    });
+    q('#cupBtn') && (q('#cupBtn').onclick = () => { act('cupido', { a: sel[0], b: sel[1] }); sel = []; });
+    q('#healBtn') && (q('#healBtn').onclick = () => { witch.heal = !witch.heal; render(); });
+    app.querySelectorAll('[data-poison]').forEach(b => b.onclick = () => { witch.poison = witch.poison === b.dataset.poison ? null : b.dataset.poison; render(); });
+    q('#witchBtn') && (q('#witchBtn').onclick = () => { act('witch', { heal: witch.heal, poison: witch.poison }); witch = { heal: false, poison: null }; });
+    app.querySelectorAll('[data-chan]').forEach(b => b.onclick = () => { chatChannel = b.dataset.chan; render(); });
+    const ci = q('#chatInput'); if (ci) ci.oninput = () => { chatDraft = ci.value; };
+    const f = q('#chatForm');
+    if (f) f.onsubmit = (e) => { e.preventDefault(); const i = q('#chatInput'); if (i.value.trim()) { send({ type: 'chat', channel: chatChannel, text: i.value.trim() }); i.value = ''; chatDraft = ''; } };
+    const cb = q('#chatBox'); if (cb) cb.scrollTop = cb.scrollHeight;
+  }
+})();
+</script>
+</body>
+</html>

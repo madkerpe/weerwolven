@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Host · Wakkerdam</title>
+<link rel="stylesheet" href="/static/app.css">
+<style>
+  .actions button { width: 100%; margin-bottom: 8px; }
+  .log { font-size: .85rem; max-height: 200px; overflow-y: auto; color: var(--muted); }
+  .log div { padding: 2px 0; border-bottom: 1px dotted var(--line); }
+  .confirm { border-color: var(--accent); background: #2a1515; }
+  .answer { border-color: var(--accent2); }
+  .mic.on { background: var(--accent); color: #fff; }
+  .seat { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px dotted var(--line); font-size: .95rem; }
+  .seat .b { display: flex; gap: 6px; }
+</style>
+</head>
+<body>
+<div class="wrap" id="app"><div class="card"><p>Verbinden...</p></div></div>
+<script src="/static/common.js"></script>
+<script>
+(function () {
+  const { esc, toast, connect, phaseLabel, ROLE_NL } = WW;
+  const key = new URLSearchParams(location.search).get('key') || '';
+  let view = null, fatal = null, draft = '';
+  const app = document.getElementById('app');
+  const sock = connect(() => ({ kind: 'host', key }), {
+    onState(v) { view = v; render(); },
+    onError(m) { if (m.fatal) { fatal = m.text; render(); } else toast(m.text); },
+  });
+  const host = (action, extra) => sock.send({ type: 'host', action, ...(extra || {}) });
+
+
+  function withFocus(fn) {
+    const a = document.activeElement, id = a && a.id, pos = a && a.selectionStart;
+    fn();
+    if (id) { const el = document.getElementById(id); if (el) { el.focus(); try { el.setSelectionRange(pos, pos); } catch {} } }
+  }
+  function render() { withFocus(renderInner); }
+  function renderInner() {
+    if (fatal) { app.innerHTML = `<div class="card"><h1>Geen toegang</h1><p>${esc(fatal)}</p><p class="muted">Gebruik de link met ?key=... uit de terminal.</p></div>`; return; }
+    if (!view) return;
+    const v = view, h = v.host;
+    const alive = v.players.filter(p => p.alive);
+    const narrs = v.narrations || [];
+    const last = narrs.filter(n => n.status === 'ready').slice(-1)[0];
+    const thinking = narrs.some(n => n.status === 'thinking');
+    app.innerHTML = `
+      <div class="card"><div class="row"><h1 style="margin:0">${esc(phaseLabel(v))}</h1><span class="tag" style="flex:0 0 auto">${alive.length} in leven · spel ${v.game_no + 1}</span></div>
+        <p class="big" style="color:var(--accent2)">${esc(v.screen_instruction)}</p>
+        ${thinking ? '<p class="muted">De verteller denkt na...</p>' : ''}
+        ${v.phase === 'vote' ? `<p class="status">Gestemd: ${v.vote.voted.length} van ${alive.length}</p>` : ''}
+        ${/^night_/.test(v.phase) ? `<p class="status">Getikt: ${v.night_progress.done} van ${v.night_progress.total}. Nog niet: ${alive.filter(p => !h.night_done.includes(p.name)).map(p => esc(p.name)).join(', ') || 'niemand'}</p>` : ''}
+        ${v.phase === 'reveal' ? `<p class="status">Nog niet gelezen: ${alive.filter(p => !p.acked).map(p => esc(p.name)).join(', ') || 'niemand'}</p>` : ''}
+        ${v.phase === 'hunter' ? `<p class="status">Wachten op de jager (${esc(v.hunter_pending)}). Of typ: "de jager schiet op ..."</p>` : ''}
+      </div>
+      ${h.pending_confirm ? `<div class="card confirm"><h2>Bevestigen</h2><p class="big">${esc(h.pending_confirm.text)}</p><div class="row"><button class="primary" id="yes">Ja</button><button id="no">Nee</button></div></div>` : ''}
+      ${h.answer ? `<div class="card answer"><div class="row"><p style="margin:0">${esc(h.answer)}</p><button class="small ghost" id="clearAns" style="flex:0 0 auto">x</button></div></div>` : ''}
+      <div class="card">
+        <form id="textForm"><div class="row"><input type="text" id="text" placeholder="Zeg wat er gebeurd is, bv. 'Bram is dood', 'volgende', 'herhaal'" autocomplete="off" value="${esc(draft)}">
+          ${('webkitSpeechRecognition' in window) ? '<button type="button" class="mic" id="mic" style="flex:0 0 auto" title="Inspreken">🎤</button>' : ''}
+          <button class="primary" style="flex:0 0 auto">Stuur</button></div></form>
+        <p class="muted" style="font-size:.8rem">${h.llm ? 'Vrije tekst wordt door de verteller geïnterpreteerd (sonnet). Doden en nieuw spel vragen altijd bevestiging.' : 'Geen claude CLI gevonden: alleen eenvoudige zinnen met een naam en "dood", of de knoppen.'}</p>
+      </div>
+      <div class="card actions"><h3>Knoppen</h3>${h.actions.map(a => `<button data-act="${a.id}" class="${['start', 'start_vote', 'night'].includes(a.id) ? 'primary' : ''}">${esc(a.label)}</button>`).join('')}</div>
+      ${last ? `<div class="card"><h3>Verteller (laatste)</h3><p class="narr">${esc(last.text)}</p></div>` : ''}
+      <div class="card"><h3>Spelers</h3>${v.players.map(p => `<div class="seat"><span>${p.alive ? '' : '✝ '}${esc(p.name)} <span class="muted">${esc(p.titel || '')}${p.role ? ' · ' + esc(ROLE_NL[p.role]) : ''}</span> ${h.seats[p.name].connected ? '<span class="tag ok">online</span>' : (h.seats[p.name].claimed ? '<span class="tag">offline</span>' : '<span class="tag">niet gekozen</span>')}</span>
+        <span class="b">${p.alive && !['lobby', 'end'].includes(v.phase) ? `<button class="small" data-kill="${esc(p.name)}">dood</button>` : ''}<button class="small ghost" data-reset="${esc(p.name)}">zetel vrij</button></span></div>`).join('')}</div>
+      <div class="card"><h3>Instellingen</h3>
+        <label class="row"><input type="checkbox" id="s_reveal" ${v.settings.reveal_roles ? 'checked' : ''} style="flex:0 0 auto"> <span>Rol tonen bij overlijden</span></label>
+        <label class="row"><input type="checkbox" id="s_gossip" ${v.settings.gossip ? 'checked' : ''} style="flex:0 0 auto"> <span>Dorpsgeroddel 's ochtends vermelden</span></label>
+        <p class="muted" style="font-size:.8rem">Hoofdscherm: <a style="color:var(--muted)" href="/screen" target="_blank">/screen</a> · Spelers: ${esc(v.join_url || '')}</p>
+      </div>
+      <div class="card"><h3>Logboek</h3><div class="log">${v.events.slice().reverse().map(e => `<div>${esc(e.text)}</div>`).join('')}</div></div>`;
+    bind();
+  }
+
+  function bind() {
+    const q = (s) => app.querySelector(s);
+    app.querySelectorAll('[data-act]').forEach(b => b.onclick = () => {
+      if (b.dataset.act === 'new_game' && !confirm('Nieuw spel starten?')) return;
+      if (b.dataset.act === 'force_step' && !confirm('Nachtstap forceren? Wie nog niet tikte, doet dan niets.')) return;
+      host(b.dataset.act);
+    });
+    app.querySelectorAll('[data-kill]').forEach(b => b.onclick = () => { if (confirm(`${b.dataset.kill} is dood?`)) host('kill', { target: b.dataset.kill }); });
+    app.querySelectorAll('[data-reset]').forEach(b => b.onclick = () => { if (confirm(`Zetel van ${b.dataset.reset} vrijgeven?`)) host('reset_seat', { target: b.dataset.reset }); });
+    q('#yes') && (q('#yes').onclick = () => host('confirm'));
+    q('#no') && (q('#no').onclick = () => host('reject'));
+    q('#clearAns') && (q('#clearAns').onclick = () => host('clear_answer'));
+    q('#s_reveal').onchange = (e) => host('setting', { key: 'reveal_roles', value: e.target.checked });
+    q('#s_gossip').onchange = (e) => host('setting', { key: 'gossip', value: e.target.checked });
+    const input = q('#text');
+    input.oninput = () => { draft = input.value; };
+    q('#textForm').onsubmit = (e) => { e.preventDefault(); const t = input.value.trim(); if (t) { sock.send({ type: 'host_text', text: t }); draft = ''; input.value = ''; } };
+    const mic = q('#mic');
+    if (mic) mic.onclick = () => {
+      const R = new webkitSpeechRecognition(); R.lang = 'nl-BE'; R.interimResults = false; R.maxAlternatives = 1;
+      mic.classList.add('on');
+      R.onresult = (ev) => { input.value = ev.results[0][0].transcript; draft = input.value; };
+      R.onend = () => mic.classList.remove('on');
+      R.onerror = () => { mic.classList.remove('on'); toast('Spraakherkenning mislukt.'); };
+      R.start();
+    };
+  }
+})();
+</script>
+</body>
+</html>
