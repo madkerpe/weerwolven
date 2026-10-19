@@ -73,7 +73,7 @@
     html += renderPrompt(me, night);
     html += renderRole(me);
     if (me.all_roles) html += renderAllRoles(me);
-    if (last) html += `<div class="card"><h3>De verteller zei</h3><p class="narr">${esc(last.text)}</p></div>`;
+    if (last) html += `<div class="card"><h3>De verteller zei</h3><p class="narr">${esc(last.text)}</p>${last.instruction ? `<p style="color:var(--accent2)">${esc(last.instruction)}</p>` : ''}</div>`;
     html += renderPlayers();
     html += renderChat(me);
     html += `<p class="muted" style="text-align:center;font-size:.8rem">Spel ${view.game_no + 1} · <a href="#" id="logout" style="color:var(--muted)">ander toestel? naam loslaten</a></p>`;

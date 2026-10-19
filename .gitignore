@@ -6,3 +6,4 @@ state.tmp
 server.log
 *.pyc
 .DS_Store
+.venv39/

@@ -67,7 +67,8 @@ class Hub:
         self.save_enabled = save
         self.clients: list[Client] = []
         self.rng = random.Random()
-        self._processed_event = self.game._event_id
+        self._processed_game = self.game.game_no
+        self._processed_event = self._resume_point(self.game)
         self._tasks: set[asyncio.Task] = set()
         self.host_answer: str | None = None
         self.save()  # host-sleutel meteen vastleggen zodat een herstart dezelfde link houdt
@@ -131,8 +132,20 @@ class Hub:
         await self.broadcast()
 
     # ------------------------------------------------------------ narration
+    @staticmethod
+    def _resume_point(g: Game) -> int:
+        """Na een herstart: ga verder na het laatst vertelde event, maar vertel hoogstens het allerlaatste event alsnog."""
+        last_told = max((n.get("event_id") or 0 for n in g.narrations), default=0)
+        return max(last_told, g._event_id - 1)
+
     def _narrate_new_events(self) -> None:
+        """Alle nieuwe events van deze mutatie vormen samen een 'batch': ze blijven samen op het scherm."""
         g = self.game
+        if g.game_no != self._processed_game:
+            # nieuw spel: eventnummers beginnen opnieuw
+            self._processed_game = g.game_no
+            self._processed_event = 0
+        batch = None
         for ev in g.events:
             if ev["id"] <= self._processed_event:
                 continue
@@ -142,20 +155,20 @@ class Hub:
                 continue
             if kind == "night_step":
                 kind = ev["step"]
-            if kind == "vote_start":
-                text = "Het dorp stemt. Kijk naar je GSM en kies wie vandaag moet hangen. Je mag ook blanco stemmen." if ev.get("day") else ""
-                g.add_narration(kind, text, "ready", ev["id"])
-                continue
+            if batch is None:
+                g.narr_batch += 1
+                batch = g.narr_batch
+            instr = narration.instruction_text(kind, g)
             if kind == "death_host":
-                g.add_narration(kind, ev["text"], "ready", ev["id"])
+                g.add_narration(kind, ev["text"], "ready", ev["id"], instruction=instr, batch=batch)
                 continue
             fallback = narration.fallback_text(kind, g, self.rng)
             if narration.uses_llm(kind) and llm.available():
-                item = g.add_narration(kind, fallback, "thinking", ev["id"])
+                item = g.add_narration(kind, fallback, "thinking", ev["id"], instruction=instr, batch=batch)
                 prompt = narration.build_prompt(kind, g, fallback)
                 self._spawn(self._generate(item["id"], prompt, fallback))
             else:
-                g.add_narration(kind, fallback, "ready", ev["id"])
+                g.add_narration(kind, fallback, "ready", ev["id"], instruction=instr, batch=batch)
 
     def _spawn(self, coro) -> None:
         task = asyncio.ensure_future(coro)
@@ -410,6 +423,11 @@ def create_app(hub: Hub | None = None) -> FastAPI:
     app = FastAPI(title="Weerwolven van Wakkerdam")
     app.state.hub = hub or Hub()
     app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
+
+    @app.on_event("startup")
+    async def _resume():
+        # na een herstart: het laatste event alsnog vertellen als dat nog niet gebeurd was
+        await app.state.hub.changed()
 
     @app.get("/")
     async def player_page():

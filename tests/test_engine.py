@@ -129,6 +129,10 @@ def test_hunter_shoots_after_night_death():
     jager = r["jager"][0]
     do_night(g, wolf_target=jager, lovers=[r["burger"][0], r["burger"][1]])
     assert g.phase == "hunter" and g.hunter_pending == jager
+    # de dode jager moet op zijn GSM de schietkeuze krijgen, niet "je bent dood"
+    pr = g.player_view(jager)["me"]["prompt"]
+    assert pr["kind"] == "pick" and jager not in pr["options"]
+    assert g.player_view(r["burger"][2])["me"]["prompt"]["kind"] == "wait"
     with pytest.raises(GameError):
         g.submit_hunter(r["burger"][0], r["burger"][1])
     target = r["weerwolf"][0]
@@ -285,3 +289,20 @@ def test_new_game_keeps_seats():
     assert g.phase == "lobby"
     assert g.check_token("Bram", tok)
     assert g.game_no == 1
+
+
+def test_public_view_shows_live_votes():
+    g = started(seed=61)
+    r = roles(g)
+    do_night(g, wolf_target=r["burger"][0], lovers=[r["burger"][1], r["burger"][2]])
+    if g.phase == "hunter":
+        g.submit_hunter(g.hunter_pending, r["weerwolf"][0])
+    g.start_vote()
+    a, b = g.alive()[0], g.alive()[1]
+    g.submit_vote(a, b)
+    pv = g.public_view()["vote"]
+    assert pv["votes"] == {a: b}
+    for n in g.alive()[1:]:
+        g.submit_vote(n, a if n != a else None)
+    assert g.last_vote_result["votes"][a] == b
+    assert g.public_view()["vote"]["votes"] == {}  # stemming voorbij

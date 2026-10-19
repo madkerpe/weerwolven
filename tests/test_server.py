@@ -108,7 +108,16 @@ async def test_full_game_over_hub(hub):
     if g.phase == "hunter":
         await act(g.hunter_pending, action="hunter", target=[x for x in g.alive() if x != g.hunter_pending][0])
     assert g.phase in ("day", "end")
-    assert any(x["kind"] == "morning" for x in g.narrations)
+    morning = next(x for x in g.narrations if x["kind"] == "morning")
+    if not any(x["kind"] == "hunter" for x in g.narrations):
+        assert morning["instruction"]
+    else:
+        assert morning["instruction"] == ""  # de jagerstekst draagt dan de instructie
+    # intro: verhaal en instructie gescheiden, nachtstappen elk een eigen batch
+    intro = next(x for x in g.narrations if x["kind"] == "intro")
+    assert "Gelezen" in intro["instruction"] and "Gelezen" not in intro["text"]
+    nights = [x for x in g.narrations if x["kind"].startswith("night_")]
+    assert len({x["batch"] for x in nights}) == len(nights)
     # screen shows narration + progress fields
     sv = screen.last()
     assert sv["narrations"][-1]["status"] == "ready"
@@ -187,3 +196,32 @@ def test_http_routes(hub):
         assert client.get("/screen").status_code == 200
         assert client.get("/host").status_code == 200
         assert client.get("/qr.svg").headers["content-type"].startswith("image/svg")
+
+
+async def test_new_game_narrates_again(hub):
+    g = hub.game
+    host = Conn(hub)
+    await host.send({"type": "hello", "kind": "host", "key": g.host_key})
+    await host.send({"type": "host", "action": "start"})
+    assert any(x["kind"] == "intro" for x in g.narrations)
+    await host.send({"type": "host", "action": "new_game"})
+    assert g.narrations == []
+    await host.send({"type": "host", "action": "start"})
+    assert any(x["kind"] == "intro" for x in g.narrations), "na nieuw spel moet de intro opnieuw verteld worden"
+
+
+async def test_restart_resumes_narration(tmp_path, monkeypatch):
+    from weerwolven import server
+    monkeypatch.setattr(server, "STATE_PATH", tmp_path / "state.json")
+    h = Hub(game=Game(seed=5), save=True)
+    host = Conn(h)
+    await host.send({"type": "hello", "kind": "host", "key": h.game.host_key})
+    await host.send({"type": "host", "action": "start"})
+    h.game.narrations = []  # alsof er nooit verteld werd
+    h.save()
+    h2 = Hub(save=True)
+    host2 = Conn(h2)
+    await host2.send({"type": "hello", "kind": "host", "key": h2.game.host_key})
+    await host2.send({"type": "host", "action": "force_ack"})
+    kinds = [x["kind"] for x in h2.game.narrations]
+    assert "intro" in kinds and "night_cupido" in kinds

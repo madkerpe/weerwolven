@@ -65,7 +65,16 @@ teksten voor intro, ochtend, lynch, jagersschot en slot (10 tot 20 s, het scherm
 - **Iemand tikt niet**: host klikt "Forceer deze nachtstap" of "Tel de stemmen nu".
 - **Server herstart**: de stand staat in `state.json`, alles loopt gewoon door. Verwijder dat bestand voor een schone start.
 - **Verkeerde uitslag**: host typt "X is dood" (bevestigen) of klikt "dood" bij de speler.
-- **Wifi hapert**: de telefoon verbindt zelf opnieuw en haalt de stand op. Zorg dat laptop en GSM's op hetzelfde netwerk zitten en dat de macOS-firewall Python toelaat.
+- **Wifi hapert**: de telefoon verbindt zelf opnieuw en haalt de stand op. Zorg dat laptop en GSM's op hetzelfde netwerk zitten.
+- **GSM's krijgen "ERR_EMPTY_RESPONSE"** terwijl localhost werkt: de macOS-firewall blokkeert de (ad-hoc gesigneerde) uv-Python.
+  Op een beheerde Mac kan dat niet via de CLI worden aangepast. Oplossing: draai de server met Apple's ingebouwde Python,
+  die automatisch door de firewall mag:
+
+  ```bash
+  /usr/bin/python3 -m venv .venv39
+  uv pip install --python .venv39/bin/python "fastapi<0.116" "uvicorn[standard]<0.35" "websockets<14" segno
+  .venv39/bin/python -m weerwolven
+  ```
 
 ## Zelf testen
 

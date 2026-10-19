@@ -75,6 +75,7 @@ class Game:
         self.last_vote_result: dict | None = None
         self.events: list[dict] = []
         self.narrations: list[dict] = []
+        self.narr_batch = 0
         self.repeat = {"seq": 0, "id": None}
         self.chat: dict[str, list[dict]] = {"public": [], "wolves": [], "lovers": [], "dead": []}
         self.winner: str | None = None
@@ -130,10 +131,16 @@ class Game:
         self.events.append(ev)
         return ev
 
-    def add_narration(self, kind: str, text: str, status: str = "ready", event_id: int | None = None) -> dict:
-        """Nieuwe vertellerstekst in de wachtrij voor het scherm. status: 'thinking' of 'ready'."""
+    def add_narration(self, kind: str, text: str, status: str = "ready", event_id: int | None = None,
+                      instruction: str | None = None, batch: int | None = None) -> dict:
+        """Nieuwe vertellerstekst voor het scherm. 'text' is verhaal, 'instruction' is wat de spelers moeten doen.
+        Items met dezelfde 'batch' horen bij hetzelfde moment en blijven samen op het scherm staan."""
         self._narr_id += 1
-        item = {"id": self._narr_id, "kind": kind, "text": text, "status": status, "event_id": event_id, "day": self.day, "ts": _now()}
+        if batch is None:
+            self.narr_batch += 1
+            batch = self.narr_batch
+        item = {"id": self._narr_id, "kind": kind, "text": text, "status": status, "event_id": event_id,
+                "instruction": instruction, "batch": batch, "day": self.day, "ts": _now()}
         self.narrations.append(item)
         self.narrations = self.narrations[-60:]
         self._touch()
@@ -534,12 +541,13 @@ class Game:
         self._tally()
 
     def _tally(self) -> None:
+        votes = dict(self.vote["votes"])
         counts: dict[str, int] = {}
         for t in self.vote["votes"].values():
             if t:
                 counts[t] = counts.get(t, 0) + 1
         if not counts:
-            self.last_vote_result = {"lynched": None, "counts": {}, "round": self.vote["round"], "tie": []}
+            self.last_vote_result = {"lynched": None, "counts": {}, "round": self.vote["round"], "tie": [], "votes": votes}
             self._event("no_lynch", "Niemand kreeg stemmen. Niemand sterft.", counts=counts)
             self.vote = {}
             self.phase = "dusk"
@@ -551,18 +559,18 @@ class Game:
             target = tops[0]
             died = self._apply_deaths([(target, "gelyncht")])
             self.last_deaths = died
-            self.last_vote_result = {"lynched": target, "counts": counts, "round": self.vote["round"]}
+            self.last_vote_result = {"lynched": target, "counts": counts, "round": self.vote["round"], "votes": votes}
             self._event("lynch", f"Het dorp lyncht {self.titel(target)}.", name=target, counts=counts, deaths=died)
             self.vote = {}
             self._after_deaths(next_phase="dusk")
             return
         if self.vote["round"] == 1:
             self.vote = {"round": 2, "candidates": sorted(tops), "votes": {}}
-            self.last_vote_result = {"lynched": None, "counts": counts, "round": 1, "tie": sorted(tops)}
+            self.last_vote_result = {"lynched": None, "counts": counts, "round": 1, "tie": sorted(tops), "votes": votes}
             self._event("tie", "Gelijkspel. Herstemming tussen " + " en ".join(tops) + ".", tie=tops, counts=counts)
             self._touch()
             return
-        self.last_vote_result = {"lynched": None, "counts": counts, "round": 2, "tie": sorted(tops)}
+        self.last_vote_result = {"lynched": None, "counts": counts, "round": 2, "tie": sorted(tops), "votes": votes}
         self._event("no_lynch", "Opnieuw gelijkspel. Niemand sterft vandaag.", tie=tops, counts=counts)
         self.vote = {}
         self.phase = "dusk"
@@ -650,6 +658,8 @@ class Game:
         others = [n for n in alive if n != name]
         if self.phase == "lobby":
             return {"kind": "wait", "title": "Wachten op de start", "text": "De host start het spel zodra iedereen er is."}
+        if self.phase == "hunter" and name == self.hunter_pending:
+            return {"kind": "pick", "title": "Jager: wie neem je mee?", "text": "Je sterft, maar je schiet nog een keer.", "options": others, "submitted": False}
         if not p["alive"]:
             return {"kind": "dead", "title": "Je bent dood", "text": "Blijf stil en geniet van het schouwspel. Je ziet nu alle rollen."}
         if self.phase == "reveal":
@@ -702,8 +712,6 @@ class Game:
                 "decoy": True,
             }
         if self.phase == "hunter":
-            if name == self.hunter_pending:
-                return {"kind": "pick", "title": "Jager: wie neem je mee?", "text": "Je sterft, maar je schiet nog een keer.", "options": others, "submitted": False}
             return {"kind": "wait", "title": "De jager richt...", "text": "Even geduld."}
         if self.phase == "day":
             return {"kind": "wait", "title": f"Dag {self.day}", "text": "Bespreek aan tafel wie verdacht is. De host start de stemming."}
@@ -750,6 +758,7 @@ class Game:
                 "round": self.vote.get("round"),
                 "candidates": self.vote_candidates() if self.phase == "vote" else [],
                 "voted": voted,
+                "votes": dict(self.vote.get("votes", {})) if self.phase == "vote" else {},
                 "last_result": self.last_vote_result,
             },
             "last_deaths": [{k: v for k, v in d.items() if k != "role" or self.settings["reveal_roles"]} for d in self.last_deaths],
@@ -863,6 +872,7 @@ class Game:
             "last_vote_result": self.last_vote_result,
             "events": self.events,
             "narrations": self.narrations,
+            "narr_batch": self.narr_batch,
             "repeat": self.repeat,
             "chat": self.chat,
             "winner": self.winner,

@@ -64,7 +64,7 @@
         <p class="muted" style="font-size:.8rem">${h.llm ? 'Vrije tekst wordt door de verteller geïnterpreteerd (sonnet). Doden en nieuw spel vragen altijd bevestiging.' : 'Geen claude CLI gevonden: alleen eenvoudige zinnen met een naam en "dood", of de knoppen.'}</p>
       </div>
       <div class="card actions"><h3>Knoppen</h3>${h.actions.map(a => `<button data-act="${a.id}" class="${['start', 'start_vote', 'night'].includes(a.id) ? 'primary' : ''}">${esc(a.label)}</button>`).join('')}</div>
-      ${last ? `<div class="card"><h3>Verteller (laatste)</h3><p class="narr">${esc(last.text)}</p></div>` : ''}
+      ${last ? `<div class="card"><h3>Verteller (laatste)</h3><p class="narr">${esc(last.text)}</p>${last.instruction ? `<p style="color:var(--accent2)">${esc(last.instruction)}</p>` : ''}</div>` : ''}
       <div class="card"><h3>Spelers</h3>${v.players.map(p => `<div class="seat"><span>${p.alive ? '' : '✝ '}${esc(p.name)} <span class="muted">${esc(p.titel || '')}${p.role ? ' · ' + esc(ROLE_NL[p.role]) : ''}</span> ${h.seats[p.name].connected ? '<span class="tag ok">online</span>' : (h.seats[p.name].claimed ? '<span class="tag">offline</span>' : '<span class="tag">niet gekozen</span>')}</span>
         <span class="b">${p.alive && !['lobby', 'end'].includes(v.phase) ? `<button class="small" data-kill="${esc(p.name)}">dood</button>` : ''}<button class="small ghost" data-reset="${esc(p.name)}">zetel vrij</button></span></div>`).join('')}</div>
       <div class="card"><h3>Instellingen</h3>

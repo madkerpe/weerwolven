@@ -16,6 +16,7 @@
   .main { padding: 36px 48px; display: flex; flex-direction: column; justify-content: center; overflow: hidden; }
   .instruction { font-size: 1.5rem; color: var(--accent2); text-transform: uppercase; letter-spacing: .12em; margin-bottom: 24px; font-family: Georgia, serif; }
   .story { font-size: 2.1rem; line-height: 1.4; max-height: 62vh; overflow-y: auto; }
+  .story p { margin: 0 0 .6em; }
   .story.len2 { font-size: 1.75rem; } .story.len3 { font-size: 1.45rem; } .story.len4 { font-size: 1.2rem; }
   .story.thinking { color: var(--muted); font-style: italic; font-size: 1.5rem; }
   .side { border-left: 1px solid var(--line); padding: 24px; display: flex; flex-direction: column; gap: 18px; overflow: hidden; }
@@ -31,6 +32,15 @@
   .progress { height: 10px; background: var(--panel2); border-radius: 5px; overflow: hidden; }
   .progress i { display: block; height: 100%; background: var(--accent2); transition: width .4s; }
   .votebox { font-size: 1.1rem; }
+  .votes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px 18px; margin-top: 10px; }
+  .votes.small { font-size: .95rem; }
+  .vote { display: flex; gap: 8px; align-items: baseline; opacity: .45; }
+  .vote.done { opacity: 1; }
+  .vote .who { color: var(--muted); min-width: 5.5em; }
+  .vote .arrow { color: var(--accent2); }
+  .vote .target { font-weight: 600; }
+  .tally { margin-top: 14px; display: flex; gap: 18px; flex-wrap: wrap; color: var(--muted); }
+  .tally b { color: var(--accent2); font-size: 1.2em; }
   .ctrl { position: fixed; right: 12px; bottom: 64px; opacity: .25; font-size: .8rem; }
   .ctrl:hover { opacity: 1; }
   .ctrl select, .ctrl button { font-size: .8rem; min-height: 28px; padding: 2px 6px; }
@@ -71,7 +81,7 @@
     if (voice) sel.value = voice.name;
     sel.onchange = () => { voice = vs.find(v => v.name === sel.value) || null; try { localStorage.setItem('ww_voice', sel.value); } catch {} };
   }
-  if (synth) { loadVoices(); synth.onvoiceschanged = loadVoices; }
+  if (synth) { loadVoices(); synth.onvoiceschanged = loadVoices; setTimeout(loadVoices, 1500); setTimeout(loadVoices, 4000); }
 
   function splitSentences(t) { return t.replace(/\s+/g, ' ').match(/[^.!?]+[.!?]+["']?|[^.!?]+$/g) || [t]; }
   function speak(text) {
@@ -97,7 +107,7 @@
   document.getElementById('startBtn').onclick = () => {
     unlocked = true; document.getElementById('overlay').style.display = 'none';
     if (synth) { const u = new SpeechSynthesisUtterance(' '); synth.speak(u); }
-    if (view) { const ready = view.narrations.filter(n => n.status === 'ready'); const last = ready[ready.length - 1]; if (last) { spoken.add(last.id); speak(last.text); } view.narrations.forEach(n => spoken.add(n.id)); }
+    if (view) { view.narrations.forEach(n => spoken.add(`${view.game_no}:${n.id}`)); const ready = view.narrations.filter(n => n.status === 'ready'); const last = ready[ready.length - 1]; if (last) { speak(last.text); if (last.instruction) speak(last.instruction); } }
   };
   document.getElementById('mute').onclick = (e) => { muted = !muted; e.target.textContent = muted ? 'geluid aan' : 'stil'; if (muted) stopSpeaking(); };
   document.getElementById('fs').onclick = () => document.documentElement.requestFullscreen && document.documentElement.requestFullscreen();
@@ -109,8 +119,9 @@
     document.body.className = isNight(v) ? 'night' : (v.phase === 'day' || v.phase === 'vote' ? 'day' : '');
     document.getElementById('phase').textContent = phaseLabel(v);
     // Spraak: nieuwe klare vertellingen, in volgorde
-    (v.narrations || []).forEach(n => { if (n.status === 'ready' && !spoken.has(n.id)) { spoken.add(n.id); if (n.text) speak(n.text); } });
-    if (v.repeat && v.repeat.seq !== lastRepeat) { lastRepeat = v.repeat.seq; const n = v.narrations.find(x => x.id === v.repeat.id); if (n) { stopSpeaking(); speak(n.text); } }
+    const key = (n) => `${v.game_no}:${n.id}`;
+    (v.narrations || []).forEach(n => { if (n.status === 'ready' && !spoken.has(key(n))) { spoken.add(key(n)); if (n.text) speak(n.text); if (n.instruction) speak(n.instruction); } });
+    if (v.repeat && v.repeat.seq !== lastRepeat) { lastRepeat = v.repeat.seq; const n = v.narrations.find(x => x.id === v.repeat.id); if (n) { stopSpeaking(); speak(n.text); if (n.instruction) speak(n.instruction); } }
     renderMain(v); renderSide(v); renderBottom(v);
   }
 
@@ -121,14 +132,17 @@
         <p class="muted" style="margin-top:18px">${v.players.filter(p => p.claimed).length} van ${v.players.length} hebben een naam gekozen.</p></div>`;
       return;
     }
+    // Alles van het laatste moment (zelfde batch) blijft samen staan: bv. ochtend + jager.
     const narrs = v.narrations || [];
-    const thinking = narrs.find(n => n.status === 'thinking');
-    const ready = narrs.filter(n => n.status === 'ready' && n.text);
-    const last = ready[ready.length - 1];
+    const lastBatch = narrs.length ? narrs[narrs.length - 1].batch : null;
+    const batchItems = narrs.filter(n => n.batch === lastBatch);
+    const ready = batchItems.filter(n => n.status === 'ready' && n.text);
+    const thinking = batchItems.find(n => n.status === 'thinking');
     let story = '';
-    const lenCls = (t) => t.length > 900 ? 'len4' : t.length > 600 ? 'len3' : t.length > 350 ? 'len2' : '';
-    if (last) story = `<div class="story ${lenCls(last.text)}">${esc(last.text)}</div>`;
+    if (ready.length) story = `<div class="story">${ready.map(n => `<p>${esc(n.text)}</p>`).join('')}</div>`;
     if (thinking) story += `<div class="story thinking" style="margin-top:16px">De verteller denkt na...</div>`;
+    const withInstr = batchItems.filter(n => n.instruction).slice(-1)[0];
+    const instruction = withInstr ? withInstr.instruction : v.screen_instruction;
     let extra = '';
     if (isNight(v)) {
       const pct = v.night_progress.total ? Math.round(100 * v.night_progress.done / v.night_progress.total) : 0;
@@ -136,17 +150,20 @@
     }
     if (v.phase === 'vote') {
       const alive = v.players.filter(p => p.alive);
+      const votes = v.vote.votes || {};
       extra = `<div class="votebox" style="margin-top:28px"><p>${v.vote.round === 2 ? 'Herstemming tussen ' + v.vote.candidates.map(esc).join(' en ') + '.' : ''} Gestemd: ${v.vote.voted.length} van ${alive.length}</p>
-        <div class="players">${alive.map(p => `<span class="player" style="${v.vote.voted.includes(p.name) ? 'border-color:var(--ok)' : 'opacity:.5'}">${esc(p.name)}</span>`).join('')}</div></div>`;
+        <div class="votes">${alive.map(p => { const t = votes[p.name]; const done = p.name in votes;
+          return `<div class="vote ${done ? 'done' : ''}"><span class="who">${esc(p.name)}</span><span class="arrow">${done ? '→' : '…'}</span><span class="target">${done ? (t ? esc(t) : 'blanco') : ''}</span></div>`; }).join('')}</div>
+        ${tallyHtml(votes)}</div>`;
     }
-    if ((v.phase === 'dusk' || v.phase === 'hunter') && v.vote.last_result && v.vote.last_result.counts && Object.keys(v.vote.last_result.counts).length) {
-      const c = v.vote.last_result.counts;
-      extra = `<p class="muted" style="margin-top:24px">Uitslag: ${Object.entries(c).sort((a, b) => b[1] - a[1]).map(([n, k]) => `${esc(n)} ${k}`).join(' · ')}</p>`;
+    if ((v.phase === 'dusk' || v.phase === 'hunter') && v.vote.last_result && v.vote.last_result.votes && Object.keys(v.vote.last_result.votes).length) {
+      const votes = v.vote.last_result.votes;
+      extra = `<div class="votebox" style="margin-top:24px"><div class="votes small">${Object.entries(votes).map(([n, t]) => `<div class="vote done"><span class="who">${esc(n)}</span><span class="arrow">→</span><span class="target">${t ? esc(t) : 'blanco'}</span></div>`).join('')}</div>${tallyHtml(votes)}</div>`;
     }
     if (v.phase === 'end') {
       extra += `<div class="dead-roles" style="margin-top:18px">${v.players.map(p => `${esc(p.name)}: ${esc(ROLE_NL[p.role] || '?')}${p.lover ? ' (verliefd op ' + esc(p.lover) + ')' : ''}`).join(' · ')}</div>`;
     }
-    main.innerHTML = `<div class="instruction">${esc(v.screen_instruction)}</div>${story}${extra}`;
+    main.innerHTML = `<div class="instruction">${esc(instruction)}</div>${story}${extra}`;
     fitStory();
   }
 
@@ -160,6 +177,13 @@
     }
   }
   window.addEventListener('resize', fitStory);
+
+  function tallyHtml(votes) {
+    const c = {};
+    Object.values(votes).forEach(t => { if (t) c[t] = (c[t] || 0) + 1; });
+    const rows = Object.entries(c).sort((a, b) => b[1] - a[1]);
+    return rows.length ? `<p class="tally">${rows.map(([n, k]) => `<span><b>${esc(n)}</b> ${k}</span>`).join('')}</p>` : '';
+  }
 
   function renderSide(v) {
     const side = document.getElementById('side');

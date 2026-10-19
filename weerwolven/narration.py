@@ -18,32 +18,52 @@ STYLE = (
     "dorpstitel (bv. 'Bram de molenaar'). Spreek het dorp aan met 'jullie', nooit met 'u'. Verzin geen feiten over wie "
     "schuldig is en onthul nooit een rol die niet in de context staat. Gebruik NOOIT 'hij', 'zij', 'hem' of 'haar' "
     "voor een speler: herhaal de voornaam of gebruik 'die'. Hou je strikt aan het opgegeven maximum aantal woorden. "
-    "De tekst wordt voorgelezen door een computerstem: korte zinnen, geen afkortingen, geen opmaak."
+    "De tekst wordt voorgelezen door een computerstem: korte zinnen, geen afkortingen, geen opmaak. "
+    "Schrijf alleen verhaal; zeg nooit wat de spelers moeten doen of waar ze moeten kijken."
 )
 
 INTRO_FALLBACK = [
     "Welkom in Wakkerdam, een dorp tussen de rivier en het bos, waar de deuren vroeger nooit op slot gingen. "
     "Sinds een paar weken is dat anders. Er verdwijnen schapen, er klinkt gehuil uit het bos, en twee van jullie zijn niet wie ze zeggen dat ze zijn. "
-    "Iedereen heeft nu op de GSM een rol en een personage gekregen. Lees het stil, en laat niemand meekijken. "
-    "Niemand hoeft vanavond de ogen te sluiten: alles wat in het donker gebeurt, gebeurt op jullie telefoon. Hou hem in je hand. "
-    "Tik op 'Gelezen' zodra je klaar bent.",
+    "Vanavond komt het erop aan.",
 ]
+
+INSTRUCTIONS = {
+    "intro": "Lees nu stil je rol en personage op je GSM. Laat niemand meekijken. Niemand sluit de ogen: alles gebeurt op je telefoon. Tik op Gelezen als je klaar bent.",
+    "night_cupido": "Iedereen kijkt naar zijn GSM en tikt op iemand. Niet praten, niet meekijken.",
+    "night_wolves": "Iedereen kijkt naar zijn GSM en tikt op iemand. Niet praten, niet meekijken.",
+    "night_witch": "Iedereen tikt nog een keer op zijn GSM.",
+    "morning": "Bespreek aan tafel wie verdacht is. De host start de stemming.",
+    "hunter": "Jager, kies op je GSM wie je meeneemt.",
+    "vote_start": "Stem nu op je GSM. Blanco mag ook.",
+    "tie": "Stem opnieuw op je GSM, alleen tussen de genoemde namen.",
+    "lynch": "De host laat zo de nacht vallen.",
+    "no_lynch": "De host laat zo de nacht vallen.",
+    "death_host": "",
+    "end": "Alle rollen staan op het scherm. De host kan een nieuw spel starten.",
+}
+
+
+def instruction_text(kind: str, g: Game) -> str:
+    if kind == "hunter_shot":
+        return INSTRUCTIONS["morning"] if g.phase == "day" else (INSTRUCTIONS["lynch"] if g.phase == "dusk" else "")
+    if kind in ("lynch", "no_lynch", "morning") and g.phase == "end":
+        return ""
+    if kind == "morning" and g.phase == "hunter":
+        return ""
+    return INSTRUCTIONS.get(kind, "")
 
 NIGHT_FALLBACK = {
     "night_cupido": [
-        "De eerste nacht valt over Wakkerdam. Cupido sluipt door het dorp en kiest twee harten die vanaf nu aan elkaar hangen. "
-        "Iedereen kijkt naar zijn GSM en tikt. Niemand praat.",
+        "De eerste nacht valt over Wakkerdam. Cupido sluipt door het dorp en kiest twee harten die vanaf nu aan elkaar hangen.",
     ],
     "night_wolves": [
-        "Het dorp slaapt, of doet alsof. De wolven sluipen door de straten en kiezen hun prooi. De ziener tuurt ondertussen in het donker naar een gezicht. "
-        "Iedereen tikt op zijn GSM, zodat niemand weet wie echt aan het werk is.",
-        "Mist hangt over de Wakker. Ergens in het dorp openen twee paar ogen zich die niet horen te glinsteren. De wolven kiezen. De ziener kijkt. "
-        "Iedereen tikt op zijn GSM, niemand kijkt op.",
+        "Het dorp slaapt, of doet alsof. De wolven sluipen door de straten en kiezen hun prooi. De ziener tuurt ondertussen in het donker naar een gezicht.",
+        "Mist hangt over de Wakker. Ergens in het dorp openen twee paar ogen zich die niet horen te glinsteren. De wolven kiezen. De ziener kijkt.",
     ],
     "night_witch": [
-        "De heks wordt wakker van een geur die niet in het dorp thuishoort. Ze bekijkt haar drankjes en beslist. "
-        "Iedereen tikt opnieuw op zijn GSM.",
-        "In een keuken brandt nog een kaars. De heks weegt af wat vannacht de moeite waard is. Iedereen tikt opnieuw op zijn GSM.",
+        "De heks wordt wakker van een geur die niet in het dorp thuishoort. De drankjes staan klaar, de keuze is zwaar.",
+        "In een keuken brandt nog een kaars. De heks weegt af wat vannacht de moeite waard is.",
     ],
 }
 
@@ -68,10 +88,14 @@ NO_LYNCH_FALLBACK = [
     "Het dorp raakt er niet uit. Niemand wordt vandaag veroordeeld, en de avond valt met een onbehaaglijk gevoel.",
 ]
 TIE_FALLBACK = [
-    "Gelijkspel. Het dorp stemt opnieuw, maar nu alleen tussen {lijst}.",
+    "Gelijkspel. Het dorp raakt er niet uit en moet opnieuw kiezen, tussen {lijst}.",
+]
+VOTE_START_FALLBACK = [
+    "Het dorp verzamelt zich onder de grote eik. De tijd van praten is voorbij.",
+    "De klok op de kerktoren slaat. Wakkerdam moet oordelen.",
 ]
 HUNTER_FALLBACK = [
-    "{titel} was de jager. Met een laatste krachtsinspanning grijpt de jager naar het geweer. Kijk naar je GSM, jager.",
+    "{titel} was de jager. Met een laatste krachtsinspanning grijpt de jager naar het geweer en zoekt een doelwit.",
 ]
 HUNTER_SHOT_FALLBACK = [
     "Een schot galmt over het plein. De jager heeft {titel} geraakt. Ook {titel} valt.",
@@ -160,6 +184,8 @@ def fallback_text(kind: str, g: Game, rng: random.Random | None = None) -> str:
         return text
     if kind == "dusk":
         return _pick(rng, DUSK_FALLBACK)
+    if kind == "vote_start":
+        return _pick(rng, VOTE_START_FALLBACK)
     if kind == "end":
         text = END_FALLBACK.get(g.winner or "dorp", END_FALLBACK["dorp"])
         wolves = [n for n in g.names if g.players[n]["role"] == "weerwolf"]
@@ -203,9 +229,7 @@ def build_prompt(kind: str, g: Game, fallback: str) -> str:
         task = (
             "Schrijf de openingstekst van het spel (maximaal 130 woorden). Beschrijf het dorp Wakkerdam en de dreiging: "
             "er zijn twee weerwolven onder de negen dorpelingen. Noem de dorpelingen met voornaam en titel: " + titels + ". "
-            "Eindig verplicht met deze praktische instructie, in eigen woorden maar volledig: iedereen leest nu stil rol en personage op de GSM, "
-            "laat niemand meekijken, niemand sluit vanavond de ogen want alles in het donker gebeurt op de telefoon, "
-            "hou de GSM in de hand en tik op Gelezen."
+            "Geen praktische instructies (die worden apart getoond): alleen sfeer en dreiging."
         )
     elif kind == "morning":
         died = g.last_deaths
